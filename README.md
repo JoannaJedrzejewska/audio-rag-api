@@ -15,13 +15,13 @@ REST API do transkrypcji nagrań audio i semantycznego przeszukiwania treści z 
 [Klient]
    │
    v
-[FastAPI]  ──► [faster-Whisper ASR]   → transkrypcja
+[FastAPI]  ──> [faster-Whisper ASR]   - transkrypcja
    │
    v
-[ChromaDB] ──► [sentence-transformers] → embeddingi
+[ChromaDB] ──> [sentence-transformers] - embeddingi
    │
    v
-[LLM Generator] (Gemini / OpenAI)  → odpowiedź RAG
+[LLM Generator] (Gemini / OpenAI)  - odpowiedź RAG
 ```
 
 ## Stack
@@ -72,24 +72,6 @@ python scripts/download_ecb_soundcloud.py --dry-run
 python scripts/download_ecb_soundcloud.py --output sample_data/
 ```
 
-### Własne pliki z Google Drive
-
-Jeśli masz nagrania zapisane na Google Drive (inne konto):
-
-```bash
-# 1. Zainstaluj rclone
-curl https://rclone.org/install.sh | sudo bash
-
-# 2. Skonfiguruj dostęp (jednorazowo)
-rclone config
-# n → gdrive2 → drive → autoryzuj przez przeglądarkę
-
-# 3. Zsynchronizuj nagrania
-rclone copy "gdrive2:Folder z filmami EBC" data/ecb_videos/ --progress
-
-# 4. Uploaduj do API
-python scripts/upload_to_api.py --input data/ecb_videos/ --ext mp4
-```
 
 ### Masowy upload do API
 
@@ -221,28 +203,6 @@ minikube delete                       # usuwa klaster
 | `OPENAI_API_KEY`     | —                                       | Klucz API OpenAI              |
 | `MAX_FILE_SIZE_MB`   | `25`                                    | Maks. rozmiar pliku audio     |
 
----
-
-## Przykłady użycia
-
-```bash
-# Upload audio
-curl -X POST http://localhost:8000/audio/transcribe \
-  -F "file=@sample_data/sample_00.wav"
-
-# Sprawdź status transkrypcji
-curl http://localhost:8000/audio/jobs/<job_id>
-
-# Wyszukiwanie semantyczne
-curl -X POST http://localhost:8000/rag/search \
-  -H "Content-Type: application/json" \
-  -d '{"query": "deposit facility rate", "top_k": 5}'
-
-# Pytanie RAG
-curl -X POST http://localhost:8000/rag/answer \
-  -H "Content-Type: application/json" \
-  -d '{"question": "What was the ECB interest rate decision in March 2024?", "top_k": 3}'
-```
 
 ---
 
