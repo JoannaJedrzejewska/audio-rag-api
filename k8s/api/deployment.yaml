@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-rag-api
+  namespace: audio-rag
+  labels:
+    app: audio-rag-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: audio-rag-api
+  template:
+    metadata:
+      labels:
+        app: audio-rag-api
+    spec:
+      containers:
+        - name: audio-rag-api
+          image: audio-rag-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: audio-rag-config
+            - secretRef:
+                name: audio-rag-secret
+          resources:
+            requests:
+              cpu:    "500m"
+              memory: "2Gi"
+            limits:
+              cpu:    "2"
+              memory: "6Gi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds:       30
+            failureThreshold:    3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds:       15
+            failureThreshold:    3
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            failureThreshold:    20
+            periodSeconds:       10

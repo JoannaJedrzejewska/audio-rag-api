@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.git/
+.gitignore
+*.md
+tests/
+k8s/
+sample_data/
+plots/
+*.ipynb
+docker-compose.yml
+.dockerignore

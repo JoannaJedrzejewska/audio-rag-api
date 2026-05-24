@@ -1,0 +1,46 @@
+# Opcjonalny workflow: automatyczny re-deploy na Minikube przez self-hosted runner
+# lub przez kubectl + kubeconfig zapisany w GitHub Secrets.
+#
+# Uruchamia się TYLKO po pomyślnym CI na main.
+name: CD (deploy to K8s)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: v1.29.0
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_BASE64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update image tag
+        run: |
+          IMAGE=ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
+          kubectl set image deployment/audio-rag-api \
+            audio-rag-api=$IMAGE \
+            -n audio-rag
+
+      - name: Wait for rollout
+        run: kubectl rollout status deployment/audio-rag-api -n audio-rag --timeout=120s
+
+      - name: Verify health
+        run: |
+          kubectl port-forward svc/audio-rag-api-service 8888:80 -n audio-rag &
+          sleep 5
+          curl -f http://localhost:8888/health

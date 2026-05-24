@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: audio-rag-api-service
+  namespace: audio-rag
+  labels:
+    app: audio-rag-api
+spec:
+  selector:
+    app: audio-rag-api
+  ports:
+    - name:       http
+      protocol:   TCP
+      port:       80
+      targetPort: 8000
+  type: ClusterIP

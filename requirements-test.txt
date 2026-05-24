@@ -1,0 +1,7 @@
+pytest>=7.4
+pytest-cov
+pytest-asyncio
+httpx
+fastapi
+requests
+python-multipart
