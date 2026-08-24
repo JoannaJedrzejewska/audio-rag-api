@@ -131,7 +131,6 @@ docker build -t audio-rag-api:latest .
 # Zakoduj klucz API w base64
 echo -n "twoj-klucz-gemini" | base64
 # Wstaw wynik do k8s/secret.yaml w polu GEMINI_API_KEY
-# NIGDY nie commituj pliku z prawdziwymi kluczami!
 ```
 
 ### Krok 4 — Zaaplikuj manifesty
@@ -247,8 +246,8 @@ audio-rag-api/
 │       ├── service.yaml
 │       └── hpa.yaml
 ├── scripts/
-│   ├── download_ecb_soundcloud.py   ← pobieranie konferencji EBC
-│   └── upload_to_api.py             ← masowy upload do API
+│   ├── download_ecb_soundcloud.py   - pobieranie konferencji EBC
+│   └── upload_to_api.py             - masowy upload do API
 ├── sample_data/
 │   └── README.md
 ├── tests/
