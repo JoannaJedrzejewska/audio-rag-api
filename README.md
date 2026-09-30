@@ -32,7 +32,7 @@ REST API do transkrypcji nagrań audio i semantycznego przeszukiwania treści z 
 | Transkrypcja   | faster-whisper 1.0.3 (model: small)      |
 | Embeddingi     | paraphrase-multilingual-MiniLM-L12-v2    |
 | Baza wektorowa | ChromaDB (osobny kontener/pod)           |
-| LLM            | Google Gemini 1.5 Flash / GPT-3.5        |
+| LLM            | Google Gemini 3.8 Flash / GPT-3.5        |
 | Orkiestracja   | Kubernetes (Minikube lokalnie)           |
 
 ## Endpointy
@@ -58,6 +58,8 @@ Skrypt automatycznie pobiera wszystkie dostępne konferencje prasowe i pomija
 inne materiały (podcasty, wywiady, przemówienia).
 
 ### Pobieranie danych (SoundCloud)
+Poniższe zależności są potrzebne tylko do pobierania nagrań na komputerze, nie do
+uruchomienia API w Dockerze. Kontener API instaluje `ffmpeg` podczas budowania obrazu.
 
 ```bash
 # Wymagania
@@ -86,20 +88,56 @@ python scripts/upload_to_api.py --input sample_data/ --ext wav --limit 5
 Skrypt czeka na zakończenie każdej transkrypcji i zapisuje wyniki do `upload_results.json`.
 
 ---
+### Lokalnie bez Dockera
+```bash 
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
 
+docker run --rm -it \
+  --name audio-rag-chromadb \
+  -p 8001:8000 \
+  -v chroma_data:/chroma/chroma \
+  chromadb/chroma:0.6.3
+
+source .venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+# a w przeglądarce otwórz:
+
+http://localhost:8000/docs
+
+```
 ## Uruchomienie lokalne (docker-compose)
 
 ```bash
-# 1. Skopiuj i uzupełnij konfigurację
-cp .env.example .env
-# Ustaw GEMINI_API_KEY lub OPENAI_API_KEY
+# 1. Przygotuj konfigurację
+test -f .env || cp .env.example .env
+# W pliku .env ustaw:
+# LLM_PROVIDER=gemini
+# GEMINI_API_KEY=<klucz z Google AI Studio>
 
-# 2. Uruchom (pierwsze uruchomienie ~5-10 min — pobiera modele)
+# 2. Zbuduj obraz i uruchom API oraz ChromaDB
+# Upewnij się, że działa Docker Desktop lub daemon Dockera
+docker info
+docker ps
 docker compose up --build
 
-# 3. Sprawdź
+# 3. W drugim terminalu sprawdź status
+docker compose ps
 curl http://localhost:8000/health
 ```
+
+Otwórz `http://localhost:8000/docs`, aby korzystać z API. Przy pierwszym starcie
+API pobiera modele Whisper i embeddingów; może to potrwać kilka minut. Klucz Gemini
+jest potrzebny do `/rag/answer`, nie do samego uruchomienia kontenerów.
+W Codespaces API używa domyślnego bridge Dockera, ponieważ DNS sieci Compose może
+nie rozwiązywać `huggingface.co`. API łączy się z ChromaDB przez
+`host.docker.internal:8001`. `DOCKER_DNS_SERVER` wskazuje DNS hosta; poza Azure
+ustaw w `.env` resolver używany przez hosta.
+
+Logi sprawdzisz poleceniem `docker compose logs -f api chromadb`. Zatrzymanie:
+`docker compose down` (dane ChromaDB pozostają w wolumenie). 
 
 ---
 
@@ -317,3 +355,33 @@ cp .env.example .env
 ### Uwagi
 - `MAX_FILE_SIZE_MB` ustaw na min. 200 dla plików EBC (domyślne nagrania to 100–300 MB)
 - Transkrypcja na CPU zajmuje ok. 15–40 min na plik — rozważ model `tiny` do testów
+
+### Dla modelu lokalnego
+W pliku .env ustaw:
+
+LLM_PROVIDER=local
+LOCAL_LLM_HOST=http://localhost:11434
+LOCAL_LLM_MODEL=llama3.2:1b
+Następnie uruchom lokalny serwer modelu, np. przez Ollama.
+
+``` bash
+# Instalacja Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+ollama --version
+
+ollama serve
+```
+Pozostaw pierwszy terminal otwarty. Ollama powinna działać pod adresem:
+http://localhost:11434
+W drugim terminalu pobierz model i sprawdź jego działanie:
+
+```bash
+ollama pull llama3.2:1b
+
+ollama run llama3.2:1b "Reply only: OK"
+
+curl http://localhost:11434
+
+ollama list
+```
