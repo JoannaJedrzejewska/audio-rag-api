@@ -5,8 +5,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from retriever import retrieve  # zakłada, że retriever.py jest w tym samym katalogu
 
 # GOLD SET: pytanie -> zbiór numerów artykułów, które SĄ poprawną odpowiedzią.
-# W realnym projekcie to powinno być 30-50 par, ręcznie zweryfikowanych
-# przez sprawdzenie faktycznej treści Konstytucji.
 GOLD_SET = [
     {"query": "Kto powołuje premiera?", "expected_articles": ["154"]},
     {"query": "Ile trwa kadencja Sejmu?", "expected_articles": ["98"]},
