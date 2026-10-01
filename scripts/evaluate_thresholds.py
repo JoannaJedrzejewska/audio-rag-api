@@ -1,54 +1,105 @@
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import argparse
+from collections.abc import Sequence
+import json
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from retriever import retrieve  # zakłada, że retriever.py jest w tym samym katalogu
 
-# GOLD SET: pytanie -> zbiór numerów artykułów, które SĄ poprawną odpowiedzią.
+SEARCH_LIMIT = 20
+THRESHOLDS = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25]
+
+# Expected source filename prefixes must match transcripts indexed in ChromaDB.
 GOLD_SET = [
-    {"query": "Kto powołuje premiera?", "expected_articles": ["154"]},
-    {"query": "Ile trwa kadencja Sejmu?", "expected_articles": ["98"]},
-    {"query": "Kto może być prezydentem Polski?", "expected_articles": ["127"]},
-    {"query": "Kiedy można wprowadzić stan wyjątkowy?", "expected_articles": ["230", "231", "232"]},
-    {"query": "Jakie prawa ma obywatel polski?", "expected_articles": ["30", "31", "32", "33"]},
-    {"query": "Jak zmienić Konstytucję?", "expected_articles": ["235"]},
-    {"query": "Co to jest Trybunał Stanu?", "expected_articles": ["198", "199"]},
+    {
+        "query": "Jaką decyzję dotyczącą polityki pieniężnej ogłosił EBC 17 kwietnia 2025?",
+        "expected_sources": ["20250416_"],
+    },
+    {
+        "query": "Jaką decyzję dotyczącą polityki pieniężnej ogłosił EBC 10 września 2026?",
+        "expected_sources": ["20260909_"],
+    },
 ]
 
 
-def precision_at_k(retrieved_ids, expected_ids, k):
-    """Jaka część z top-k zwróconych wyników jest faktycznie poprawna."""
-    top_k_ids = retrieved_ids[:k]
-    if not top_k_ids:
+def retrieve(query: str, api_url: str, top_k: int = SEARCH_LIMIT) -> list[dict[str, Any]]:
+    request = Request(
+        f"{api_url.rstrip('/')}/rag/search",
+        data=json.dumps({"query": query, "top_k": top_k}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=60) as response:
+            payload = json.load(response)
+    except HTTPError as error:
+        detail = error.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"API zwróciło HTTP {error.code}: {detail}") from error
+    except URLError as error:
+        raise RuntimeError(f"Nie można połączyć się z API: {error.reason}") from error
+
+    if not isinstance(payload, dict):
+        raise ValueError("Odpowiedź /rag/search nie jest obiektem JSON.")
+    results = payload.get("results")
+    if not isinstance(results, list):
+        raise ValueError("Odpowiedź /rag/search nie zawiera listy 'results'.")
+    return results
+
+
+def precision_at_k(
+    retrieved_sources: Sequence[str], expected_sources: Sequence[str], k: int
+) -> float:
+    """Odsetek top-k źródeł, które są oznaczone jako oczekiwane."""
+    if k <= 0:
         return 0.0
-    hits = sum(1 for rid in top_k_ids if rid in expected_ids)
-    return hits / len(top_k_ids)
+    top_sources = retrieved_sources[:k]
+    hits = sum(
+        any(source.startswith(prefix) for prefix in expected_sources)
+        for source in top_sources
+    )
+    return hits / k
 
 
-def recall_at_k(retrieved_ids, expected_ids, k):
-    """Jaka część OCZEKIWANYCH artykułów faktycznie znalazła się w top-k."""
-    if not expected_ids:
+def recall_at_k(
+    retrieved_sources: Sequence[str], expected_sources: Sequence[str], k: int
+) -> float:
+    """Odsetek oczekiwanych źródeł znalezionych w top-k."""
+    if not expected_sources:
         return 0.0
-    top_k_ids = retrieved_ids[:k]
-    hits = sum(1 for eid in expected_ids if eid in top_k_ids)
-    return hits / len(expected_ids)
+    top_sources = retrieved_sources[:k]
+    hits = sum(
+        any(source.startswith(expected) for source in top_sources)
+        for expected in expected_sources
+    )
+    return hits / len(expected_sources)
 
 
-def evaluate_threshold(threshold, top_k=5):
-    """
-    Dla danego progu odcięcia liczy średnie precision@k i recall@k
-    po całym gold secie. Próg jest tu symulowany poprzez odfiltrowanie
-    wyników z retrieve() po score, bo retrieve() ma hardkodowany próg
-    0.08 w oryginalnym kodzie — w realnym eksperymencie warto tymczasowo
-    sparametryzować retrieve(), żeby przyjmowała threshold jako argument.
-    """
+def unique_sources(results: Sequence[dict[str, Any]]) -> list[str]:
+    """Zredukuj wiele fragmentów tej samej transkrypcji do jednego źródła."""
+    seen: set[str] = set()
+    sources = []
+    for result in results:
+        filename = result.get("filename")
+        if isinstance(filename, str) and filename and filename not in seen:
+            seen.add(filename)
+            sources.append(filename)
+    return sources
+
+
+def evaluate_threshold(
+    threshold: float,
+    results_by_query: dict[str, list[dict[str, Any]]],
+    top_k: int = 5,
+) -> dict[str, float]:
+    """Compute mean precision@k and recall@k after filtering scores."""
     precisions, recalls = [], []
     for item in GOLD_SET:
-        results = retrieve(item["query"], top_k=top_k * 2)  # bierzemy więcej, żeby ręcznie przefiltrować
-        filtered = [r for r in results if r["score"] >= threshold]
-        retrieved_ids = [r["art_num"] for r in filtered]
-        precisions.append(precision_at_k(retrieved_ids, item["expected_articles"], top_k))
-        recalls.append(recall_at_k(retrieved_ids, item["expected_articles"], top_k))
+        results = results_by_query[item["query"]]
+        filtered = [result for result in results if result["score"] >= threshold]
+        sources = unique_sources(filtered)
+        expected = item["expected_sources"]
+        precisions.append(precision_at_k(sources, expected, top_k))
+        recalls.append(recall_at_k(sources, expected, top_k))
     return {
         "threshold": threshold,
         "avg_precision": sum(precisions) / len(precisions),
@@ -63,17 +114,65 @@ def f1_score(precision, recall):
 
 
 def main():
-    thresholds_to_test = [0.02, 0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25]
+    parser = argparse.ArgumentParser(
+        description="Evaluate score thresholds against indexed ECB transcripts."
+    )
+    parser.add_argument(
+        "--api",
+        default="http://127.0.0.1:8000",
+        help="Audio RAG API base URL (default: http://127.0.0.1:8000)",
+    )
+    parser.add_argument(
+        "--top-k",
+        type=int,
+        default=5,
+        help="Number of unique source files used for metrics (1-20; default: 5)",
+    )
+    args = parser.parse_args()
+    if not 1 <= args.top_k <= SEARCH_LIMIT:
+        parser.error(f"--top-k must be between 1 and {SEARCH_LIMIT}")
+
+    results_by_query = {}
+    try:
+        for item in GOLD_SET:
+            results_by_query[item["query"]] = retrieve(item["query"], args.api)
+    except (RuntimeError, ValueError, KeyError, TypeError) as error:
+        raise SystemExit(
+            f"Nie udało się pobrać wyników z API {args.api}: {error}. "
+            "Uruchom API i sprawdź, czy ChromaDB jest dostępna."
+        ) from error
+
+    if not any(results_by_query.values()):
+        raise SystemExit(
+            "API zwróciło 0 wyników. Najpierw zaindeksuj transkrypcje audio w ChromaDB."
+        )
+
+    has_expected_source = any(
+        any(
+            result.get("filename", "").startswith(prefix)
+            for prefix in item["expected_sources"]
+        )
+        for item in GOLD_SET
+        for result in results_by_query[item["query"]]
+    )
+    if not has_expected_source:
+        print(
+            "Uwaga: żaden oczekiwany plik nie pojawił się w wynikach. "
+            "Sprawdź, czy pliki z GOLD_SET są zaindeksowane.\n"
+        )
 
     print(f"{'Próg':>6} | {'Precision':>10} | {'Recall':>8} | {'F1':>6}")
     print("-" * 40)
 
     results = []
-    for t in thresholds_to_test:
-        r = evaluate_threshold(t)
-        f1 = f1_score(r["avg_precision"], r["avg_recall"])
-        results.append({**r, "f1": f1})
-        print(f"{t:>6.2f} | {r['avg_precision']:>10.2%} | {r['avg_recall']:>8.2%} | {f1:>6.2%}")
+    for threshold in THRESHOLDS:
+        metrics = evaluate_threshold(threshold, results_by_query, top_k=args.top_k)
+        f1 = f1_score(metrics["avg_precision"], metrics["avg_recall"])
+        results.append({**metrics, "f1": f1})
+        print(
+            f"{threshold:>6.2f} | {metrics['avg_precision']:>10.2%} | "
+            f"{metrics['avg_recall']:>8.2%} | {f1:>6.2%}"
+        )
 
     best = max(results, key=lambda x: x["f1"])
     print(f"\nNajlepszy próg (max F1): {best['threshold']:.2f} "
@@ -82,3 +181,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

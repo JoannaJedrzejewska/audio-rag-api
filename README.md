@@ -1,139 +1,214 @@
 # Audio RAG API
 
-REST API do transkrypcji nagrań audio i semantycznego przeszukiwania treści z użyciem podejścia RAG.
+REST API do transkrypcji nagrań audio i semantycznego przeszukiwania treści z użyciem podejścia Retrieval-Augmented Generation (RAG).
 
-> **Dane źródłowe:** Konferencje prasowe Europejskiego Banku Centralnego (EBC/ECB).
-> Po każdym posiedzeniu Rady Prezesów prezes EBC wygłasza konferencję prasową,
-> na której ogłaszane są decyzje dotyczące stóp procentowych i perspektyw polityki pieniężnej.
-> Nagrania dostępne są publicznie na [SoundCloud EBC](https://soundcloud.com/europeancentralbank).
-> Aplikacja transkrybuje te nagrania (faster-Whisper ASR), indeksuje semantycznie (ChromaDB)
-> i umożliwia zadawanie pytań do zgromadzonej bazy wiedzy (RAG + LLM).
+> **Dane źródłowe:** konferencje prasowe Europejskiego Banku Centralnego (EBC/ECB).  
+> Po każdym posiedzeniu Rady Prezesów prezes EBC przedstawia decyzje dotyczące polityki pieniężnej i perspektyw gospodarczych. Aplikacja pobiera publicznie dostępne nagrania, transkrybuje je przez faster-Whisper, zapisuje embeddingi fragmentów tekstu w ChromaDB i udostępnia wyszukiwanie semantyczne oraz odpowiedzi RAG.
+
+Nagrania EBC są dostępne na [SoundCloud EBC](https://soundcloud.com/europeancentralbank).
 
 ## Architektura
 
-```
-[Klient]
-   │
-   v
-[FastAPI]  ──> [faster-Whisper ASR]   - transkrypcja
-   │
-   v
-[ChromaDB] ──> [sentence-transformers] - embeddingi
-   │
-   v
-[LLM Generator] (Gemini / OpenAI)  - odpowiedź RAG
+```text
+Klient
+  │
+  ▼
+FastAPI
+  ├── faster-Whisper ── transkrypcja audio
+  ├── sentence-transformers ── embeddingi tekstu
+  ├── ChromaDB ── przechowywanie fragmentów i wyszukiwanie wektorowe
+  └── Gemini / OpenAI / local LLM ── generowanie odpowiedzi RAG
 ```
 
 ## Stack
 
-| Komponent      | Technologia                              |
-|----------------|------------------------------------------|
-| API            | FastAPI 0.111 + Pydantic v2              |
-| Transkrypcja   | faster-whisper 1.0.3 (model: small)      |
-| Embeddingi     | paraphrase-multilingual-MiniLM-L12-v2    |
-| Baza wektorowa | ChromaDB (osobny kontener/pod)           |
-| LLM            | Google Gemini 3.8 Flash / GPT-3.5        |
-| Orkiestracja   | Kubernetes (Minikube lokalnie)           |
+| Komponent | Technologia |
+|---|---|
+| API | FastAPI 0.115.12 + Pydantic v2 |
+| Transkrypcja | faster-whisper 1.1.1, domyślny model `small` |
+| Embeddingi | sentence-transformers 3.4.1 + `paraphrase-multilingual-MiniLM-L12-v2` |
+| Baza wektorowa | ChromaDB 0.6.3 |
+| LLM | Gemini, OpenAI lub provider lokalny |
+| Konteneryzacja | Docker Compose |
+| Orkiestracja | Kubernetes / Minikube |
 
 ## Endpointy
 
-| Metoda | Endpoint               | Opis                           |
-|--------|------------------------|--------------------------------|
-| GET    | `/health`              | Status aplikacji i komponentów |
-| POST   | `/audio/transcribe`    | Upload pliku audio             |
-| GET    | `/audio/jobs/{job_id}` | Status zadania transkrypcji    |
-| POST   | `/rag/search`          | Wyszukiwanie semantyczne       |
-| POST   | `/rag/answer`          | Pytanie RAG z odpowiedzią LLM  |
+| Metoda | Endpoint | Opis |
+|---|---|---|
+| `GET` | `/health` | Status API, ChromaDB, Whisper i embeddingów |
+| `POST` | `/audio/transcribe` | Upload pliku audio i utworzenie zadania transkrypcji |
+| `GET` | `/audio/jobs/{job_id}` | Status i wynik zadania transkrypcji |
+| `POST` | `/rag/search` | Wyszukiwanie semantyczne w transkrypcjach |
+| `POST` | `/rag/answer` | Odpowiedź RAG wygenerowana przez LLM |
+| `GET` | `/docs` | Swagger UI |
+| `GET` | `/openapi.json` | Specyfikacja OpenAPI |
 
----
+> Endpoint `/` nie jest zdefiniowany. `GET /` zwraca `404 Not Found`; użyj `/docs` albo `/health`.
 
-## Dane — konferencje prasowe EBC
+## Konfiguracja
 
-### Źródło
+### Plik `.env`
 
-EBC publikuje nagrania każdej konferencji prasowej na SoundCloud:
-`https://soundcloud.com/europeancentralbank`
-
-Skrypt automatycznie pobiera wszystkie dostępne konferencje prasowe i pomija
-inne materiały (podcasty, wywiady, przemówienia).
-
-### Pobieranie danych (SoundCloud)
-Poniższe zależności są potrzebne tylko do pobierania nagrań na komputerze, nie do
-uruchomienia API w Dockerze. Kontener API instaluje `ffmpeg` podczas budowania obrazu.
+Utwórz lokalną konfigurację:
 
 ```bash
-# Wymagania
-pip install yt-dlp
-sudo apt-get install -y ffmpeg   # Ubuntu/Codespaces
-# brew install ffmpeg            # macOS
-
-# Podgląd — co zostanie pobrane (bez pobierania)
-python scripts/download_ecb_soundcloud.py --dry-run
-
-# Pobierz wszystkie konferencje prasowe jako WAV
-python scripts/download_ecb_soundcloud.py --output sample_data/
-```
-## Uruchomienie lokalne z Docker Compose
-
-### Wymagania
-
-- Docker Desktop lub Docker Engine z Docker Compose
-- Minimum 8 GB RAM; dla `WHISPER_MODEL=small` zalecane jest więcej
-- Wolne miejsce na dysku dla modeli, obrazów Docker, ChromaDB i plików audio
-- Opcjonalnie klucz Gemini lub OpenAI do endpointu `/rag/answer`
-
-### 1. Przygotuj konfigurację
-
-```bash
-cp .env.example .env
+test -f .env || cp .env.example .env
 ```
 
-Edytuj lokalny plik `.env`:
+Przykładowy `.env`:
 
 ```dotenv
+CHROMADB_HOST=127.0.0.1
+CHROMADB_PORT=8001
+CHROMA_COLLECTION=transcriptions
+
+WHISPER_MODEL=small
+EMBEDDING_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=twoj_klucz_api
+OPENAI_API_KEY=
+
 MAX_FILE_SIZE_MB=350
-WHISPER_MODEL=small
+PORT=8000
 ```
 
-Nie commituj `.env`.
+Nie commituj `.env` i nie publikuj kluczy API. `.gitignore` powinien zawierać:
 
-### 2. Uruchom API i ChromaDB
+```gitignore
+.env
+.env.*
+!.env.example
+```
+
+### Zmienne środowiskowe
+
+| Zmienna | Domyślna | Opis |
+|---|---:|---|
+| `CHROMADB_HOST` | `localhost` | `127.0.0.1` dla API uruchamianego na hoście; `chromadb` dla API uruchamianego w Docker Compose |
+| `CHROMADB_PORT` | `8001` | `8001` z hosta; `8000` przy komunikacji między kontenerami |
+| `CHROMA_COLLECTION` | `transcriptions` | Nazwa kolekcji ChromaDB |
+| `WHISPER_MODEL` | `small` | `tiny`, `base`, `small`, `medium`, `large` |
+| `EMBEDDING_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Model embeddingów |
+| `LLM_PROVIDER` | `gemini` | `gemini`, `openai` lub `local` |
+| `GEMINI_API_KEY` | — | Klucz Gemini używany przez `/rag/answer` |
+| `OPENAI_API_KEY` | — | Klucz OpenAI używany przez `/rag/answer` |
+| `MAX_FILE_SIZE_MB` | `25` | Maksymalny rozmiar pliku audio w MB |
+| `PORT` | `8000` | Port FastAPI |
+
+Dla konferencji EBC ustaw `MAX_FILE_SIZE_MB=350` lub większą wartość, jeśli największe pliki tego wymagają.
+
+## GitHub Codespaces
+
+### Dlaczego osobny wariant?
+
+W GitHub Codespaces Docker Compose może nie rozwiązywać `huggingface.co` wewnątrz kontenera API. Modele Whisper i Sentence Transformers są pobierane z Hugging Face, dlatego zalecana konfiguracja Codespaces uruchamia:
+
+```text
+ChromaDB: Docker, 127.0.0.1:8001
+FastAPI: host Codespace / Python virtual environment, 127.0.0.1:8000
+```
+
+Dzięki temu API używa działającego DNS hosta Codespace, a ChromaDB zachowuje trwałe dane w wolumenie Docker.
+
+### Terminal 1 — ChromaDB
 
 ```bash
-docker compose up -d --build
+cd /workspaces/audio-rag-api
+
+docker compose up -d chromadb
+
+docker compose ps
+
+curl -s http://127.0.0.1:8001/api/v2/heartbeat
 ```
 
-Przy pierwszym uruchomieniu obraz API pobiera modele Whisper i Sentence Transformers.
-Może to potrwać kilka minut.
-
-Podgląd logów:
+### Terminal 2 — środowisko Python i API
 
 ```bash
-docker compose logs -f api chromadb
+cd /workspaces/audio-rag-api
+
+python -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip setuptools wheel
+
+python -m pip install \
+  --timeout 120 \
+  --retries 10 \
+  -r requirements.txt
 ```
 
-API jest gotowe, gdy log zawiera:
+Jeżeli instalacja PyTorch kończy się błędem dotyczącym niedostępnej wersji `torch==2.7.1+cpu`, zmień w `requirements.txt`:
+
+```text
+torch==2.7.1+cpu
+```
+
+na wersję dostępną w aktualnym indeksie PyTorch, np.:
+
+```text
+torch==2.9.1+cpu
+```
+
+Następnie ponów instalację:
+
+```bash
+python -m pip install \
+  --timeout 120 \
+  --retries 10 \
+  -r requirements.txt
+```
+
+Sprawdź instalację:
+
+```bash
+python - <<'PY'
+import torch
+import chromadb
+from faster_whisper import WhisperModel
+from sentence_transformers import SentenceTransformer
+
+print("torch:", torch.__version__)
+print("chromadb:", chromadb.__version__)
+print("CUDA available:", torch.cuda.is_available())
+print("Imports: OK")
+PY
+```
+
+Uruchom API:
+
+```bash
+export CHROMADB_HOST=127.0.0.1
+export CHROMADB_PORT=8001
+export MAX_FILE_SIZE_MB=350
+
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Przy pierwszym uruchomieniu pobierane są modele Whisper i Sentence Transformers. API jest gotowe po komunikatach:
 
 ```text
 API gotowe.
 Application startup complete.
+Uvicorn running on http://127.0.0.1:8000
 ```
 
-### 3. Sprawdź status
+Nie zamykaj terminala z Uvicornem podczas uploadu albo trwającej transkrypcji.
+
+### Terminal 3 — health check
 
 ```bash
-docker compose ps
-
 curl -s http://127.0.0.1:8000/health | python -m json.tool
 ```
 
-Przykładowy wynik:
+Przykładowa odpowiedź:
 
 ```json
 {
   "status": "ok",
+  "version": "1.0.0",
   "components": {
     "api": "ok",
     "chromadb": "ok (0 dokumentow)",
@@ -144,41 +219,152 @@ Przykładowy wynik:
 }
 ```
 
-`ok (0 dokumentow)` oznacza, że ChromaDB działa, lecz nie zawiera jeszcze
-zaindeksowanych transkrypcji.
+`ok (0 dokumentow)` oznacza, że ChromaDB działa, ale nie zawiera jeszcze danych.
 
-### 4. Otwórz dokumentację API
+### Swagger UI
+
+Lokalnie:
 
 ```text
 http://127.0.0.1:8000/docs
 ```
 
-Endpoint `/` nie jest zdefiniowany, dlatego `GET /` zwraca `404 Not Found`.
+W Codespaces otwórz zakładkę **Ports**, znajdź port `8000`, wybierz **Open in Browser**, a następnie użyj ścieżki:
 
-### 5. Zatrzymanie
-
-```bash
-docker compose down
+```text
+/docs
 ```
 
-To zatrzymuje kontenery, ale zachowuje named volume `chroma_data`.
+## Lokalnie bez Docker Compose
 
-> Nie uruchamiaj `docker compose down -v`, jeśli chcesz zachować indeks ChromaDB.
+Ten wariant uruchamia ChromaDB w Dockerze, a API na hoście.
+
+### Terminal 1 — ChromaDB
+
+```bash
+docker run --rm -it \
+  --name audio-rag-chromadb \
+  -p 8001:8000 \
+  -v chroma_data:/chroma/chroma \
+  -e IS_PERSISTENT=TRUE \
+  -e ANONYMIZED_TELEMETRY=FALSE \
+  chromadb/chroma:0.6.3
+```
+
+### Terminal 2 — API
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install -r requirements.txt
+
+export CHROMADB_HOST=127.0.0.1
+export CHROMADB_PORT=8001
+export MAX_FILE_SIZE_MB=350
+
+uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+```
+
+Otwórz:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+## Standardowy Docker Compose
+
+Na lokalnym komputerze z poprawnym Docker DNS można uruchomić zarówno API, jak i ChromaDB w kontenerach.
+
+API musi wtedy łączyć się z ChromaDB przez wewnętrzną nazwę usługi:
+
+```yaml
+environment:
+  CHROMADB_HOST: chromadb
+  CHROMADB_PORT: "8000"
+```
+
+Uruchomienie:
+
+```bash
+docker compose up -d --build
+docker compose ps
+
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+W kontenerze API nie używaj `localhost`, `127.0.0.1` ani `host.docker.internal` do połączenia z ChromaDB. Te adresy nie wskazują kontenera `chromadb`.
+
+## Dane EBC
+
+### Pobieranie nagrań
+
+Skrypt używa `yt-dlp` i wymaga `ffmpeg` na hoście:
+
+```bash
+python -m pip install yt-dlp
+
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+```
+
+Na macOS:
+
+```bash
+brew install ffmpeg
+python -m pip install yt-dlp
+```
+
+Podgląd plików bez pobierania:
+
+```bash
+python scripts/download_ecb_soundcloud.py --dry-run
+```
+
+Pobranie konferencji do `sample_data/`:
+
+```bash
+python scripts/download_ecb_soundcloud.py --output sample_data/
+```
+
+### Uwaga o dużych plikach
+
+WAV konferencji EBC są duże. W Codespaces nie pobieraj pełnego archiwum i nie indeksuj wszystkich plików naraz, jeśli dysk jest ograniczony.
+
+Bezpieczny workflow:
+
+```text
+pobierz lub skopiuj 1 plik
+→ zaindeksuj
+→ zweryfikuj wynik
+→ usuń źródłowy WAV
+→ przejdź do kolejnego pliku
+```
 
 ## Indeksowanie audio
 
-ChromaDB nie indeksuje plików z `sample_data/` automatycznie. Dane są dodawane po:
+ChromaDB nie indeksuje automatycznie plików z `sample_data/`. Każdy plik przechodzi przez pipeline:
 
 ```text
-audio upload
+WAV
+→ POST /audio/transcribe
 → faster-Whisper
 → transkrypcja
-→ chunking
+→ dzielenie tekstu na fragmenty
 → embeddingi
 → ChromaDB
 ```
 
-### Test na jednym pliku
+### Lista dostępnych plików
+
+```bash
+find sample_data -type f \
+  \( -iname '*.wav' -o -iname '*.mp3' -o -iname '*.m4a' -o -iname '*.mp4' \) \
+  -print | head -20
+```
+
+### Test jednego pliku
 
 ```bash
 python scripts/upload_to_api.py \
@@ -189,297 +375,18 @@ python scripts/upload_to_api.py \
   --results upload_results_test.json
 ```
 
-Po zakończeniu sprawdź indeks:
+Skrypt przesyła plik do `POST /audio/transcribe`, czeka na status zadania i zapisuje wyniki do JSON.
+
+### Ręczny upload
 
 ```bash
-curl -s http://127.0.0.1:8000/health | python -m json.tool
+curl -s -X POST http://127.0.0.1:8000/audio/transcribe \
+  -F "file=@sample_data/NAZWA_PLIKU.wav" \
+  | python -m json.tool
 ```
 
-Liczba dokumentów w `components.chromadb` powinna być większa niż `0`.
+Przykładowa odpowiedź:
 
-### Upload małej partii
-
-```bash
-python scripts/upload_to_api.py \
-  --input sample_data/ \
-  --ext wav \
-  --limit 3 \
-  --api http://127.0.0.1:8000 \
-  --results upload_results_batch_01.json
-```
-
-### Upload wszystkich plików
-
-Po udanym teście:
-
-```bash
-python scripts/upload_to_api.py \
-  --input sample_data/ \
-  --ext wav \
-  --api http://127.0.0.1:8000 \
-  --results upload_results.json
-```
-
-Skrypt wysyła pliki sekwencyjnie i zapisuje wyniki po każdym pliku.
-
-## Zarządzanie miejscem na dysku
-
-Przed większym importem sprawdź wykorzystanie dysku:
-
-```bash
-df -h
-docker system df
-docker system df --verbose
-du -sh sample_data 2>/dev/null
-```
-
-Bezpieczne czyszczenie nieużywanego cache Docker:
-
-```bash
-docker compose down
-docker system prune -f
-docker builder prune -af
-```
-
-Aby całkowicie wyczyścić Docker i zacząć od zera:
-
-```bash
-docker system prune -a --volumes -f
-```
-
-> To polecenie usuwa również niewykorzystywane wolumeny, w tym potencjalnie dane
-> ChromaDB. Uruchamiaj je tylko, jeśli świadomie chcesz skasować lokalny indeks.
-
-### Masowy upload do API
-
-```bash
-# Upload wszystkich pobranych plików WAV
-python scripts/upload_to_api.py --input sample_data/ --ext wav
-
-# Tylko kilka plików (test)
-python scripts/upload_to_api.py --input sample_data/ --ext wav --limit 5
-```
-
-Skrypt czeka na zakończenie każdej transkrypcji i zapisuje wyniki do `upload_results.json`.
-
----
-### Lokalnie bez Dockera
-```bash 
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
-
-docker run --rm -it \
-  --name audio-rag-chromadb \
-  -p 8001:8000 \
-  -v chroma_data:/chroma/chroma \
-  chromadb/chroma:0.6.3
-
-source .venv/bin/activate
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
-# a w przeglądarce otwórz:
-
-http://localhost:8000/docs
-
-```
-## Uruchomienie lokalne (docker-compose)
-
-```bash
-# 1. Przygotuj konfigurację
-test -f .env || cp .env.example .env
-# W pliku .env ustaw:
-# LLM_PROVIDER=gemini
-# GEMINI_API_KEY=<klucz z Google AI Studio>
-
-# 2. Zbuduj obraz i uruchom API oraz ChromaDB
-# Upewnij się, że działa Docker Desktop lub daemon Dockera
-docker info
-docker ps
-docker compose up --build
-
-# 3. W drugim terminalu sprawdź status
-docker compose ps
-curl http://localhost:8000/health
-```
-
-Otwórz `http://localhost:8000/docs`, aby korzystać z API. Przy pierwszym starcie
-API pobiera modele Whisper i embeddingów; może to potrwać kilka minut. Klucz Gemini
-jest potrzebny do `/rag/answer`, nie do samego uruchomienia kontenerów.
-W Codespaces API używa domyślnego bridge Dockera, ponieważ DNS sieci Compose może
-nie rozwiązywać `huggingface.co`. API łączy się z ChromaDB przez
-`host.docker.internal:8001`. `DOCKER_DNS_SERVER` wskazuje DNS hosta; poza Azure
-ustaw w `.env` resolver używany przez hosta.
-
-Logi sprawdzisz poleceniem `docker compose logs -f api chromadb`. Zatrzymanie:
-`docker compose down` (dane ChromaDB pozostają w wolumenie). 
-
----
-
-## Uruchomienie na Minikube
-
-### Wymagania
-- [Minikube](https://minikube.sigs.k8s.io/) >= 1.32
-- [kubectl](https://kubernetes.io/docs/tasks/tools/) >= 1.28
-- Docker
-
-### Krok 1 — Uruchom Minikube
-
-```bash
-minikube start --memory=8192 --cpus=4 --driver=docker
-```
-
-> faster-whisper (model small) potrzebuje ~2 GB RAM. Minimum 6 GB dla całego klastra.
-
-### Krok 2 — Zbuduj obraz w Minikube
-
-```bash
-eval $(minikube docker-env)
-docker build -t audio-rag-api:latest .
-```
-
-### Krok 3 — Uzupełnij Secret
-
-```bash
-# Zakoduj klucz API w base64
-echo -n "twoj-klucz-gemini" | base64
-# Wstaw wynik do k8s/secret.yaml w polu GEMINI_API_KEY
-```
-
-### Krok 4 — Zaaplikuj manifesty
-
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/chromadb/pvc.yaml
-kubectl apply -f k8s/chromadb/deployment.yaml
-kubectl apply -f k8s/chromadb/service.yaml
-kubectl apply -f k8s/configmap.yaml
-kubectl apply -f k8s/secret.yaml
-kubectl apply -f k8s/api/deployment.yaml
-kubectl apply -f k8s/api/service.yaml
-kubectl apply -f k8s/api/hpa.yaml
-minikube addons enable ingress
-kubectl apply -f k8s/ingress.yaml
-```
-
-### Krok 5 — Sprawdź stan podów
-
-```bash
-# Poczekaj aż STATUS = Running
-kubectl get pods -n audio-rag -w
-
-kubectl get svc -n audio-rag
-kubectl describe pod -n audio-rag <nazwa-poda>   # diagnostyka
-```
-
-### Krok 6 — Dostęp do API
-
-**Opcja A — port-forward (najszybsza)**
-```bash
-kubectl port-forward -n audio-rag svc/audio-rag-api-service 8000:80
-# API dostępne na http://localhost:8000
-```
-
-**Opcja B — NodePort**
-```bash
-minikube service audio-rag-api-service -n audio-rag --url
-```
-
-**Opcja C — Ingress**
-```bash
-echo "$(minikube ip)  audio-rag.local" | sudo tee -a /etc/hosts
-# API dostępne na http://audio-rag.local
-```
-
-### Zatrzymanie klastra
-
-```bash
-minikube stop
-kubectl delete namespace audio-rag   # usuwa wszystkie zasoby
-minikube delete                       # usuwa klaster
-```
-
----
-
-## Zmienne środowiskowe
-
-| Zmienna              | Domyślna                                | Opis                          |
-|----------------------|-----------------------------------------|-------------------------------|
-| `CHROMADB_HOST`      | `localhost`                             | Adres ChromaDB                |
-| `CHROMADB_PORT`      | `8001`                                  | Port ChromaDB                 |
-| `CHROMA_COLLECTION`  | `transcriptions`                        | Nazwa kolekcji                |
-| `WHISPER_MODEL`      | `small`                                 | tiny / base / small / medium  |
-| `EMBEDDING_MODEL`    | `paraphrase-multilingual-MiniLM-L12-v2` | Model embeddingów             |
-| `LLM_PROVIDER`       | `gemini`                                | `gemini` / `openai` / `local` |
-| `GEMINI_API_KEY`     | —                                       | Klucz API Gemini              |
-| `OPENAI_API_KEY`     | —                                       | Klucz API OpenAI              |
-| `MAX_FILE_SIZE_MB`   | `25`                                    | Maks. rozmiar pliku audio     |
-
-
----
-
-## Testy
-
-```bash
-pip install -r requirements-test.txt
-pytest                              # wszystkie testy
-pytest --cov=app --cov-report=html  # z pokryciem kodu
-pytest tests/test_audio.py -v       # tylko audio
-```
-
----
-
-## Struktura projektu
-
-```
-audio-rag-api/
-├── app/
-│   ├── main.py
-│   ├── core/config.py
-│   ├── schemas/models.py
-│   ├── routers/
-│   │   ├── audio.py
-│   │   └── rag.py
-│   └── services/
-│       ├── transcription.py
-│       ├── embeddings.py
-│       ├── vector_store.py
-│       └── llm.py
-├── k8s/
-│   ├── namespace.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml
-│   ├── ingress.yaml
-│   ├── chromadb/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   └── pvc.yaml
-│   └── api/
-│       ├── deployment.yaml
-│       ├── service.yaml
-│       └── hpa.yaml
-├── scripts/
-│   ├── download_ecb_soundcloud.py   - pobieranie konferencji EBC
-│   └── upload_to_api.py             - masowy upload do API
-├── sample_data/
-│   └── README.md
-├── tests/
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-└── README.md
-```
-## Przykłady użycia
-
-### Upload i transkrypcja
-
-```bash
-curl -X POST http://localhost:8000/audio/transcribe \
-  -F "file=@sample_data/conference.wav"
-```
-
-**Odpowiedź:**
 ```json
 {
   "job_id": "801f954a-aeab-4188-bf62-b0f744c6818d",
@@ -488,75 +395,330 @@ curl -X POST http://localhost:8000/audio/transcribe \
 }
 ```
 
-### Sprawdzenie statusu
+Sprawdzanie statusu:
 
 ```bash
-curl http://localhost:8000/audio/jobs/801f954a-aeab-4188-bf62-b0f744c6818d
+curl -s \
+  http://127.0.0.1:8000/audio/jobs/TWOJ_JOB_ID \
+  | python -m json.tool
 ```
 
-**Odpowiedź po zakończeniu:**
+Możesz również odpytywać status automatycznie:
+
+```bash
+JOB_ID="TU_WSTAW_JOB_ID"
+
+while true; do
+  curl -s "http://127.0.0.1:8000/audio/jobs/$JOB_ID" | python -m json.tool
+  sleep 15
+done
+```
+
+### Potwierdzenie indeksacji
+
+Po statusie `completed` sprawdź ChromaDB:
+
+```bash
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+Liczba dokumentów w komponencie `chromadb` powinna być większa niż zero.
+
+### Wyszukiwanie semantyczne
+
+Endpoint `/rag/search` wymaga metody `POST`. Otworzenie ścieżki w przeglądarce wykonuje `GET` i zwróci `405 Method Not Allowed`.
+
+```bash
+curl -s -X POST http://127.0.0.1:8000/rag/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "What was the ECB monetary policy decision in April 2025?",
+    "top_k": 3
+  }' | python -m json.tool
+```
+
+Przed pierwszą indeksacją poprawną odpowiedzią jest:
+
 ```json
 {
-  "job_id": "801f954a-aeab-4188-bf62-b0f744c6818d",
-  "status": "completed",
-  "filename": "conference.wav",
-  "excerpt": "You're listening to the ECB podcast..."
+  "query": "What was the ECB monetary policy decision in April 2025?",
+  "results": [],
+  "total_found": 0
 }
 ```
 
-### Pytanie RAG
+To oznacza pustą kolekcję ChromaDB, nie awarię bazy.
+
+### Odpowiedź RAG
+
+Po zaindeksowaniu co najmniej jednego nagrania:
 
 ```bash
-curl -X POST http://localhost:8000/rag/answer \
+curl -s -X POST http://127.0.0.1:8000/rag/answer \
   -H "Content-Type: application/json" \
-  -d '{"question": "What was the ECB interest rate decision in June 2025?", "top_k": 3}'
+  -d '{
+    "question": "What was the ECB monetary policy decision in April 2025?",
+    "top_k": 3
+  }' | python -m json.tool
 ```
-## Development
 
-### Uruchomienie testów
+Endpoint wymaga poprawnie skonfigurowanego `LLM_PROVIDER` oraz właściwego klucza Gemini albo OpenAI.
+
+### Usuwanie przetworzonych WAV
+
+Po potwierdzeniu, że job ma status `completed`, ChromaDB zawiera dokumenty, a `/rag/search` zwraca wyniki, usuń źródłowy plik WAV, aby odzyskać miejsce:
+
+```bash
+rm "sample_data/NAZWA_PRZETWORZONEGO_PLIKU.wav"
+```
+
+Transkrypcja i embeddingi pozostają zapisane w ChromaDB.
+
+## Zarządzanie miejscem na dysku
+
+Modele ML, obrazy Docker, cache buildów, dane ChromaDB i WAV mogą szybko zapełnić dysk, szczególnie w Codespaces.
+
+### Diagnoza
+
+```bash
+df -h
+docker system df
+docker system df --verbose
+
+du -sh sample_data 2>/dev/null
+du -sh ~/.cache/huggingface ~/.cache/ctranslate2 2>/dev/null || true
+```
+
+Największe pliki w `sample_data/`:
+
+```bash
+du -ah sample_data | sort -hr | head -30
+```
+
+### Bezpieczne czyszczenie Docker
+
+Najpierw zatrzymaj usługi Docker:
+
+```bash
+docker compose down
+```
+
+Usuń nieużywane kontenery, sieci i cache buildów:
+
+```bash
+docker system prune -f
+docker builder prune -af
+```
+
+Sprawdź odzyskane miejsce:
+
+```bash
+docker system df
+df -h
+```
+
+### Tymczasowe przeniesienie WAV
+
+Jeżeli `/tmp` ma więcej wolnego miejsca niż `/workspaces`, możesz tymczasowo przenieść pobrane pliki WAV:
+
+```bash
+mkdir -p /tmp/ecb_audio_backup
+mv sample_data/*.wav /tmp/ecb_audio_backup/
+```
+
+Przywrócenie pojedynczego pliku do indeksacji:
+
+```bash
+cp "/tmp/ecb_audio_backup/NAZWA_PLIKU.wav" sample_data/
+```
+
+`/tmp` jest magazynem tymczasowym. Jego zawartość może zostać usunięta po restarcie lub przebudowie Codespace.
+
+### Operacje destrukcyjne
+
+Poniższe polecenia mogą skasować dane ChromaDB, obrazy Docker lub cache modeli:
+
+```bash
+docker compose down -v
+docker volume prune
+docker system prune -a --volumes
+docker image prune -a -f
+```
+
+Używaj ich tylko wtedy, gdy świadomie chcesz usunąć indeks lub zacząć od zera.
+
+## Testy
 
 ```bash
 pip install -r requirements-test.txt
+
+pytest
 pytest tests/ -v
-pytest tests/ --cov=app --cov-report=html
+pytest tests/test_audio.py -v
+pytest --cov=app --cov-report=html
 ```
 
-### Zmienne środowiskowe (lokalne)
+## Kubernetes / Minikube
+
+### Wymagania
+
+- [Minikube](https://minikube.sigs.k8s.io/) >= 1.32
+- [kubectl](https://kubernetes.io/docs/tasks/tools/) >= 1.28
+- Docker
+
+### Uruchomienie klastra
 
 ```bash
-cp .env.example .env
-# Uzupełnij GEMINI_API_KEY lub OPENAI_API_KEY
+minikube start --memory=16384 --cpus=4 --driver=docker
 ```
-### Uwagi
-- `MAX_FILE_SIZE_MB` ustaw na min. 200 dla plików EBC (domyślne nagrania to 100–300 MB)
-- Transkrypcja na CPU zajmuje ok. 15–40 min na plik — rozważ model `tiny` do testów
 
-### Dla modelu lokalnego
-W pliku .env ustaw:
+Manifest API uruchamia dwie repliki. Każda ładuje model Whisper i model embeddingów, dlatego dla klastra z tymi ustawieniami przeznacz około 16 GB RAM. Przy mniejszej ilości pamięci ustaw `replicas`, `minReplicas` i `maxReplicas` na `1` odpowiednio w `k8s/api/deployment.yaml` i `k8s/api/hpa.yaml`.
 
-LLM_PROVIDER=local
-LOCAL_LLM_HOST=http://localhost:11434
-LOCAL_LLM_MODEL=llama3.2:1b
-Następnie uruchom lokalny serwer modelu, np. przez Ollama.
-
-``` bash
-# Instalacja Ollama
-curl -fsSL https://ollama.com/install.sh | sh
-
-ollama --version
-
-ollama serve
-```
-Pozostaw pierwszy terminal otwarty. Ollama powinna działać pod adresem:
-http://localhost:11434
-W drugim terminalu pobierz model i sprawdź jego działanie:
+### Zbuduj obraz w Minikube
 
 ```bash
-ollama pull llama3.2:1b
+minikube image build -t audio-rag-api:latest .
+```
 
-ollama run llama3.2:1b "Reply only: OK"
+### Skonfiguruj sekret
 
-curl http://localhost:11434
+Manifest API wymaga sekretu Kubernetes `audio-rag-secret`. Dla domyślnego `LLM_PROVIDER=gemini` utwórz go z kluczem Gemini. Polecenie poprosi o klucz bez wyświetlania go w terminalu i można je bezpiecznie uruchomić ponownie:
 
-ollama list
+```bash
+read -rsp "Klucz Gemini: " GEMINI_API_KEY
+printf '\n'
+kubectl create secret generic audio-rag-secret \
+  --namespace audio-rag \
+  --from-literal=GEMINI_API_KEY="$GEMINI_API_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+unset GEMINI_API_KEY
+```
+
+W środowisku produkcyjnym użyj zewnętrznego menedżera sekretów.
+
+### Zastosuj manifesty
+
+Najpierw utwórz namespace, a następnie włącz dodatki potrzebne przez HPA i Ingress:
+
+```bash
+kubectl apply -f k8s/namespace.yaml
+minikube addons enable metrics-server
+minikube addons enable ingress
+```
+
+Utwórz sekret zgodnie z poprzednią sekcją, a następnie zastosuj pozostałe manifesty:
+
+```bash
+kubectl apply -f k8s/chromadb/pvc.yaml
+kubectl apply -f k8s/configmap.yaml
+kubectl apply -f k8s/chromadb/deployment.yaml
+kubectl apply -f k8s/chromadb/service.yaml
+kubectl apply -f k8s/api/deployment.yaml
+kubectl apply -f k8s/api/service.yaml
+kubectl apply -f k8s/api/hpa.yaml
+kubectl apply -f k8s/ingress.yaml
+```
+
+Jeśli nagrania przekraczają domyślny limit 25 MB, zwiększ `MAX_FILE_SIZE_MB` w `k8s/configmap.yaml` oraz `nginx.ingress.kubernetes.io/proxy-body-size` w `k8s/ingress.yaml`. Dla plików do 350 MB ustaw odpowiednio `350` i `350m`.
+
+### Sprawdź wdrożenie
+
+```bash
+kubectl rollout status deployment/chromadb -n audio-rag --timeout=10m
+kubectl rollout status deployment/audio-rag-api -n audio-rag --timeout=20m
+kubectl get pods -n audio-rag
+kubectl get svc -n audio-rag
+kubectl get hpa -n audio-rag
+```
+
+Pierwsze uruchomienie API pobiera modele, więc może potrwać. W razie problemów sprawdź logi poda API:
+
+```bash
+kubectl logs -n audio-rag deployment/audio-rag-api
+```
+
+### Dostęp do API
+
+Port forward:
+
+```bash
+kubectl port-forward -n audio-rag svc/audio-rag-api-service 8000:80
+```
+
+API będzie dostępne pod:
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+NodePort:
+
+```bash
+minikube service audio-rag-api-service -n audio-rag --url
+```
+
+Do adresu zwróconego przez polecenie dopisz `/docs`.
+
+Ingress (wymaga włączonego dodatku ingress):
+
+```bash
+echo "$(minikube ip) audio-rag.local" | sudo tee -a /etc/hosts
+```
+
+Otwórz Swagger UI pod adresem:
+
+```text
+http://audio-rag.local/docs
+```
+
+### Zatrzymanie i usunięcie klastra
+
+Zatrzymanie Minikube zachowuje klaster i dane ChromaDB:
+
+```bash
+minikube stop
+```
+
+Poniższe polecenia usuwają namespace, a następnie cały klaster wraz z danymi ChromaDB:
+
+```bash
+kubectl delete namespace audio-rag
+minikube delete
+```
+
+## Struktura projektu
+
+```text
+audio-rag-api/
+├── app/
+│   ├── main.py
+│   ├── core/
+│   │   └── config.py
+│   ├── routers/
+│   │   ├── audio.py
+│   │   └── rag.py
+│   ├── schemas/
+│   │   └── models.py
+│   └── services/
+│       ├── transcription.py
+│       ├── embeddings.py
+│       ├── vector_store.py
+│       └── llm.py
+├── k8s/
+│   ├── api/
+│   ├── chromadb/
+│   ├── configmap.yaml
+│   ├── ingress.yaml
+│   └── namespace.yaml
+├── scripts/
+│   ├── download_ecb_soundcloud.py
+│   └── upload_to_api.py
+├── sample_data/
+├── tests/
+├── Dockerfile
+├── docker-compose.yml
+├── requirements.txt
+├── requirements-test.txt
+├── .env.example
+└── README.md
 ```

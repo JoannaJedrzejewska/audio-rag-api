@@ -11,9 +11,9 @@ def generate_answer(question: str, docs: List[Dict[str, Any]]) -> Tuple[str, str
         if provider == "gemini" and settings.gemini_api_key:
             import google.generativeai as genai
             genai.configure(api_key=settings.gemini_api_key)
-            r = genai.GenerativeModel("gemini-1.5-flash").generate_content(
+            r = genai.GenerativeModel("gemini-3.8-flash").generate_content(
                 f"Transkrypcje EBC:\n{_fmt(docs)}\n\nPytanie: {question}\nOdpowiedz zwiezle.")
-            return r.text, "gemini-1.5-flash"
+            return r.text, "gemini-3.8-flash"
         elif provider == "openai" and settings.openai_api_key:
             from openai import OpenAI
             r = OpenAI(api_key=settings.openai_api_key).chat.completions.create(
