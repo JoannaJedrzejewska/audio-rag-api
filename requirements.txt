@@ -1,3 +1,5 @@
+# Supported Python: 3.11 or 3.12
+
 # API
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
@@ -9,8 +11,9 @@ pydantic-settings==2.9.1
 numpy==1.26.4
 
 # PyTorch CPU
+--index-url https://pypi.org/simple
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.7.1+cpu
+torch==2.7.1
 
 # Audio transcription
 faster-whisper==1.1.1

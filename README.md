@@ -73,7 +73,182 @@ python scripts/download_ecb_soundcloud.py --dry-run
 # Pobierz wszystkie konferencje prasowe jako WAV
 python scripts/download_ecb_soundcloud.py --output sample_data/
 ```
+## Uruchomienie lokalne z Docker Compose
 
+### Wymagania
+
+- Docker Desktop lub Docker Engine z Docker Compose
+- Minimum 8 GB RAM; dla `WHISPER_MODEL=small` zalecane jest więcej
+- Wolne miejsce na dysku dla modeli, obrazów Docker, ChromaDB i plików audio
+- Opcjonalnie klucz Gemini lub OpenAI do endpointu `/rag/answer`
+
+### 1. Przygotuj konfigurację
+
+```bash
+cp .env.example .env
+```
+
+Edytuj lokalny plik `.env`:
+
+```dotenv
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=twoj_klucz_api
+MAX_FILE_SIZE_MB=350
+WHISPER_MODEL=small
+```
+
+Nie commituj `.env`.
+
+### 2. Uruchom API i ChromaDB
+
+```bash
+docker compose up -d --build
+```
+
+Przy pierwszym uruchomieniu obraz API pobiera modele Whisper i Sentence Transformers.
+Może to potrwać kilka minut.
+
+Podgląd logów:
+
+```bash
+docker compose logs -f api chromadb
+```
+
+API jest gotowe, gdy log zawiera:
+
+```text
+API gotowe.
+Application startup complete.
+```
+
+### 3. Sprawdź status
+
+```bash
+docker compose ps
+
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+Przykładowy wynik:
+
+```json
+{
+  "status": "ok",
+  "components": {
+    "api": "ok",
+    "chromadb": "ok (0 dokumentow)",
+    "whisper": "loaded",
+    "embeddings": "loaded",
+    "llm": "gemini"
+  }
+}
+```
+
+`ok (0 dokumentow)` oznacza, że ChromaDB działa, lecz nie zawiera jeszcze
+zaindeksowanych transkrypcji.
+
+### 4. Otwórz dokumentację API
+
+```text
+http://127.0.0.1:8000/docs
+```
+
+Endpoint `/` nie jest zdefiniowany, dlatego `GET /` zwraca `404 Not Found`.
+
+### 5. Zatrzymanie
+
+```bash
+docker compose down
+```
+
+To zatrzymuje kontenery, ale zachowuje named volume `chroma_data`.
+
+> Nie uruchamiaj `docker compose down -v`, jeśli chcesz zachować indeks ChromaDB.
+
+## Indeksowanie audio
+
+ChromaDB nie indeksuje plików z `sample_data/` automatycznie. Dane są dodawane po:
+
+```text
+audio upload
+→ faster-Whisper
+→ transkrypcja
+→ chunking
+→ embeddingi
+→ ChromaDB
+```
+
+### Test na jednym pliku
+
+```bash
+python scripts/upload_to_api.py \
+  --input sample_data/ \
+  --ext wav \
+  --limit 1 \
+  --api http://127.0.0.1:8000 \
+  --results upload_results_test.json
+```
+
+Po zakończeniu sprawdź indeks:
+
+```bash
+curl -s http://127.0.0.1:8000/health | python -m json.tool
+```
+
+Liczba dokumentów w `components.chromadb` powinna być większa niż `0`.
+
+### Upload małej partii
+
+```bash
+python scripts/upload_to_api.py \
+  --input sample_data/ \
+  --ext wav \
+  --limit 3 \
+  --api http://127.0.0.1:8000 \
+  --results upload_results_batch_01.json
+```
+
+### Upload wszystkich plików
+
+Po udanym teście:
+
+```bash
+python scripts/upload_to_api.py \
+  --input sample_data/ \
+  --ext wav \
+  --api http://127.0.0.1:8000 \
+  --results upload_results.json
+```
+
+Skrypt wysyła pliki sekwencyjnie i zapisuje wyniki po każdym pliku.
+
+## Zarządzanie miejscem na dysku
+
+Przed większym importem sprawdź wykorzystanie dysku:
+
+```bash
+df -h
+docker system df
+docker system df --verbose
+du -sh sample_data 2>/dev/null
+```
+
+Bezpieczne czyszczenie nieużywanego cache Docker:
+
+```bash
+docker compose down
+docker system prune -f
+docker builder prune -af
+```
+
+Aby całkowicie wyczyścić Docker i zacząć od zera:
+
+```bash
+docker system prune -a --volumes -f
+```
+
+> To polecenie usuwa również niewykorzystywane wolumeny, w tym potencjalnie dane
+> ChromaDB. Uruchamiaj je tylko, jeśli świadomie chcesz skasować lokalny indeks.
 
 ### Masowy upload do API
 

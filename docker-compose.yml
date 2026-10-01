@@ -4,10 +4,20 @@ services:
     ports:
       - "8001:8000"
     volumes:
-      - chroma_data:/data
+      - chroma_data:/chroma/chroma
     environment:
-      - IS_PERSISTENT=1
-      - ANONYMIZED_TELEMETRY=False
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v2/heartbeat')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
 
   api:
     build: .
@@ -15,16 +25,12 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    network_mode: bridge
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    dns:
-      - ${DOCKER_DNS_SERVER:-168.63.129.16}
     environment:
-      - CHROMADB_HOST=host.docker.internal
-      - CHROMADB_PORT=8001
+      CHROMADB_HOST: chromadb
+      CHROMADB_PORT: "8000"
     depends_on:
-      - chromadb
+      chromadb:
+        condition: service_healthy
 
 volumes:
   chroma_data:
